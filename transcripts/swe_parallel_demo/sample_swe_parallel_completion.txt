@@ -1,0 +1,133 @@
+# log: swe_parallel_demo.eval
+# sample: swe_parallel_completion
+# wall-clock: 38.00s
+# background agents: 2
+
+===== TASK CONTEXT =====
+input:
+  SWE-style demo. Fix a small Python package while two background agents inspect independent branches: tests and implementation.
+
+metadata:
+  {
+    "agent_timeout_sec": 900,
+    "category": "swe-style-renderer-fixture",
+    "compose_template": "synthetic/docker-compose.template.yaml",
+    "difficulty": "demo",
+    "docker_image": "synthetic/demo:latest",
+    "task_name": "swe_parallel_completion",
+    "tests_dir": "synthetic/tests",
+    "verifier_timeout_sec": 900
+  }
+
+sandbox:
+  SandboxEnvironmentSpec(type='docker', config='synthetic/compose.yaml')
+
+system prompt:
+  You are an expert software engineer solving a task. Use bash and python tools. You may delegate independent branches to background subagents.
+
+available tools:
+  bash, python, agent, agent_wait, submit_answer
+
+===== ORCHESTRATOR =====
+[+0:00.00] turn 1
+  user:
+    SWE-style demo. Fix a small Python package while two background agents inspect independent branches: tests and implementation.
+
+[+0:00.00] turn 1
+  assistant tool call:
+    agent({"background": true, "prompt": "Read tests.py and report the expected behavior. Do not edit files.", "subagent_type": "general", "task_description": "Inspect tests"})
+    agent({"background": true, "prompt": "Read markdown_converter.py and identify likely bugs. Do not edit files.", "subagent_type": "general", "task_description": "Inspect implementation"})
+
+[+0:02.00] tool result:
+    Dispatched AGENT-1.
+
+[+0:03.00] tool result:
+    Dispatched AGENT-2.
+
+[+0:05.00] turn 2
+  assistant tool call:
+    bash({"command": "cd /home/agent/app && ls -la && cat main.py"})
+
+[+0:09.00] tool result:
+    main.py
+    markdown_converter.py
+    tests.py
+
+[+0:20.00] turn 3
+  assistant tool call:
+    agent_wait({"agent_ids": ["AGENT-1", "AGENT-2"], "mode": "all"})
+
+[+0:21.00] lifecycle tool result:
+    AGENT-1: tests require headers, bold, italic, and no conversion for lone operators.
+    AGENT-2: implementation uses brittle sequential replace calls.
+
+[+0:23.00] turn 4
+  assistant tool call:
+    bash({"command": "cd /home/agent/app && python - <<'PY'\nfrom pathlib import Path\nPath('markdown_converter.py').write_text('...')\nPY"})
+
+[+0:28.00] tool result:
+    (empty)
+
+[+0:30.00] turn 5
+  assistant tool call:
+    bash({"command": "cd /home/agent/app && python -m pytest -q"})
+
+[+0:34.00] tool result:
+    10 passed in 0.01s
+
+[+0:36.00] turn 6
+  assistant tool call:
+    submit_answer({"answer": "All tests pass after fixing markdown conversion."})
+
+[+0:38.00] tool result:
+    All tests pass after fixing markdown conversion.
+
+
+===== BACKGROUND AGENT: AGENT-1 general =====
+dispatched +0:02.00 -> completed +0:18.00
+
+task_description:
+  Inspect tests
+
+input:
+  Read tests.py and report expected behavior.
+
+[+0:06.00] turn 1
+  assistant tool call:
+    bash({"command": "cd /home/agent/app && cat tests.py"})
+
+[+0:11.00] tool result:
+    def test_header_1():
+        assert convert('# Hello\n') == '<h1>Hello</h1>\n'
+    
+    def test_no_conversion():
+        assert convert('3 * 5') == '3 * 5'
+
+[+0:15.00] turn 2
+  assistant:
+    Result: tests require header parsing and paired inline formatting. Evidence: `test_no_conversion` shows lone asterisks must remain unchanged.
+
+
+===== BACKGROUND AGENT: AGENT-2 general =====
+dispatched +0:03.00 -> completed +0:19.00
+
+task_description:
+  Inspect implementation
+
+input:
+  Read markdown_converter.py and identify likely bugs.
+
+[+0:07.00] turn 1
+  assistant tool call:
+    bash({"command": "cd /home/agent/app && cat markdown_converter.py"})
+
+[+0:12.00] tool result:
+    def convert(content):
+        html = content
+        html = html.replace('**', '<b>', 1)
+        html = html.replace('*', '<i>', 1)
+        return html
+
+[+0:16.00] turn 2
+  assistant:
+    Result: implementation is order-sensitive and only replaces the first delimiter pair. It will mishandle multiple italic spans and header closing tags.
