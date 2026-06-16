@@ -4,108 +4,271 @@ Run with:
     uv run inspect eval deepagent_mas_eval.py@dynamic_mas --log-dir logs --display plain
 """
 
+from __future__ import annotations
+
+import importlib
+import re
+from collections.abc import Sequence
+from typing import Any
+
 from inspect_ai import Task, task
-from inspect_ai.agent import deepagent, general
+from inspect_ai.agent import Agent, AgentState, agent, deepagent, general
 from inspect_ai.dataset import Sample
+from inspect_ai.model import ChatMessageAssistant, ChatMessageTool, Model
 from inspect_ai.scorer import includes
-from inspect_ai.tool import grep, list_files, read_file
+from inspect_ai.tool import Tool, ToolDef, ToolSource, grep, list_files, read_file
 
 
 MODEL = "openrouter/deepseek/deepseek-v4-flash"
+WORKFLOW_NAME = "deepagent_mas"
+LIFECYCLE_TOOLS = {"agent_status", "agent_wait", "agent_cancel", "agent_list"}
+BACKGROUND_DISPATCH_RE = re.compile(r"\bDispatched\s+AGENT-\d+\b")
+_DEEPAGENT_MODULE = importlib.import_module("inspect_ai.agent._deepagent.deepagent")
 
 ORCHESTRATOR_INSTRUCTIONS = """
-You are the main ReAct orchestrator for general-purpose repository and terminal
-tasks. You are the primary agent, not a reducer and not just a planner.
+You are the orchestrator for this task.
 
-Start by identifying the objective, success condition, constraints, and the
-smallest useful first inspection. Inspect before concluding. Prefer targeted
-file reads, searches, or commands over broad exploration. Avoid destructive,
-irreversible, or outward-facing actions unless the task explicitly requires
-them and the scope is clear. Use tool arguments exactly as named in the tool
-schema; when a tool reports a schema error, retry with the required argument
-names rather than changing strategy.
+Start by understanding the objective, success condition, constraints, and the
+smallest useful next step. Before acting, decide whether the work is best done
+directly or delegated.
 
-Work dynamically:
-- Handle simple or tightly coupled work directly.
-- Delegate only when a branch is independent enough to run in parallel or
-  benefits from a separate tool-using trajectory.
-- When delegating, use agent(..., background=True), keep the prompt scoped, and
-  be extremely descriptive and clear. A good subagent prompt names the branch
-  objective, exact scope, relevant files or commands if known, constraints such
-  as "do not edit files" or "do not run broad searches", the evidence you need
-  checked, and the expected report format.
-- Continue useful parent-side work after dispatching background agents, but do
-  not duplicate the delegated branch unless coordination requires it.
-- Do not use or mention a subagent's findings until agent_status or agent_wait
-  makes them available.
-- Cancel background work if it becomes irrelevant or unsafe to continue.
-- Collect needed reports with lifecycle tools, reconcile conflicts, and submit
-  the final answer yourself.
+Use your own judgment, but prefer delegation whenever the task can be split
+into independent pieces. If multiple questions can be investigated separately,
+or multiple sources of evidence can be checked independently, launch background
+subagents to handle those branches in parallel.
 
-Patterns to prefer:
-- Known file, symbol, or single fact: inspect it directly.
-- Unknown location across many files or directories: delegate one scoped search.
-- Multiple independent branches: launch background subagents, keep working on a
-  separate parent-side branch, then collect deliberately.
-- Terminal-style task: inspect the environment first, run the smallest useful
-  command from the current working directory, read failures literally, iterate,
-  then verify. Do not assume a home directory or repository path; run `pwd` only
-  when you need to confirm location.
-- File modification: use a reliable edit method. For small targeted rewrites,
-  prefer a clear Python script or here-doc over fragile shell quoting, `sed -i`,
-  or pattern edits whose portability depends on the platform.
+Background subagents are the default form of delegation. Use only asynchronous
+background subagents; do not use blocking or synchronous subagents. Parallel
+background work is usually faster and gives you more opportunities to
+coordinate, cross-check, and synthesize findings.
 
-Anti-patterns to avoid:
-- Spawning a subagent for one obvious file read, command, or lookup.
-- Launching a subagent and doing the same branch yourself in parallel.
-- Treating a background completion notice as the subagent's report.
-- Submitting because something ran, without checking whether it solved the task.
-- Broad repo sweeps before forming a concrete first hypothesis.
-- Writing a plain final response when a submit tool is available; after
-  verification, call submit with the final answer.
+That said, not every task benefits from orchestration. If the work is small,
+tightly coupled, requires only a single inspection, or cannot be meaningfully
+split into parallel branches, handle it yourself rather than creating needless
+subagents.
 
-Verify before final submission with the most relevant cheap check available.
-If verification is impossible, say exactly what was checked and what remains
-uncertain. Final answers should be concise and task-shaped: result first,
-evidence or commands checked second, gaps only when they matter.
+As the orchestrator, your primary responsibility is to coordinate work rather
+than perform every investigation personally. Think about decomposition early.
+Look for opportunities to divide the problem into clean, independent branches,
+launch those branches, continue useful coordination work while they run, and
+then integrate the results into a single conclusion.
 
-Prefer zero subagents for simple tasks, one subagent for one isolated branch,
-and multiple background subagents only when the branches are genuinely
-independent.
+When delegating:
+
+* Give each subagent a precise objective.
+* Clearly define scope and constraints.
+* Specify what evidence should be collected.
+* Explain what a successful report should contain.
+* Avoid assigning overlapping work.
+
+Once a branch has been delegated, do not duplicate that investigation yourself
+unless circumstances change and the work needs to be reassigned. Wait for the
+subagent's report, evaluate the evidence, and decide how it affects the larger
+task.
+
+Treat subagent reports as evidence, not conclusions. Compare findings across
+branches, resolve conflicts, identify gaps, and determine the final answer
+yourself.
+
+Before finishing, perform an appropriate verification step whenever practical.
+If something could not be verified, explain what was checked and what remains
+uncertain.
+
+In general:
+
+* Simple work: do it yourself.
+* Independent work: delegate it.
+* Multiple independent branches: delegate them in parallel.
+* Final reasoning, reconciliation, and synthesis: always do yourself.
+
+Your role is not to be the busiest investigator. Your role is to ensure the
+task is completed accurately and efficiently.
 """.strip()
 
 GENERAL_SUBAGENT_INSTRUCTIONS = """
-You are a scoped ReAct subagent for repository, terminal, and evidence-gathering
-work. Execute only the subtask in the prompt you receive.
+You are a scoped subagent working on behalf of an orchestrator.
 
-Use tools, observe results, and iterate as needed. Inspect before making claims.
-Keep shared-state risk low: do not modify files, start long-running work, or
-perform irreversible actions unless your prompt explicitly asks for that work.
+Your job is to answer the specific question you were assigned. Stay focused on
+that scope and avoid expanding the task.
 
-Patterns to prefer:
-- Start with the smallest search, file read, or command that can reduce
-  uncertainty.
-- Use file-name discovery before content search when the location is unknown.
-- Use content search when you know the string, symbol, error, or config key.
-- Read enough surrounding context to avoid reporting a misleading match.
-- Stop when the scoped question is answered; do not keep exploring for polish.
+Begin with the smallest useful inspection, search, file read, or command that
+can reduce uncertainty. Gather evidence, follow relevant leads, and stop once
+the assigned question has been answered.
 
-Anti-patterns to avoid:
-- Expanding the task beyond the orchestrator's prompt.
-- Dumping raw logs or file contents instead of summarizing evidence.
-- Claiming success without a checked observation.
-- Hiding failed commands, missing files, or unresolved ambiguity.
-- Using brittle one-line edits when a clear scripted edit would be safer.
+Do not create additional plans, delegate work, or broaden the investigation.
+Do not modify files or perform irreversible actions unless explicitly instructed.
 
-Return a concise completion report with:
-- result
-- evidence: files, commands, or observations checked
-- artifacts or changes, if any
-- gaps and confidence
+Report what you found, not what you assume. If evidence is incomplete or
+conflicting, say so directly.
 
-Do not broaden scope or draft the orchestrator's final answer unless explicitly
-asked.
+Return a concise report containing:
+
+* Result
+* Evidence checked
+* Artifacts or changes (if any)
+* Remaining gaps
+* Confidence
+
+The orchestrator is responsible for the final answer. Your responsibility is to
+provide accurate evidence for your assigned branch.
 """.strip()
+
+
+def _agent_tool_with_background_default(original_tool: Tool) -> Tool:
+    """Return an `agent` tool where omitted `background` dispatches async."""
+    original_def = ToolDef(original_tool)
+    parameters = original_def.parameters.model_copy(deep=True)
+    background_param = parameters.properties.get("background")
+    if background_param is None:
+        return original_tool
+
+    background_param.default = True
+    if "background" in parameters.required:
+        parameters.required.remove("background")
+
+    description = background_param.description or ""
+    default_note = "Defaults to True when omitted."
+    if default_note not in description:
+        background_param.description = f"{description} {default_note}".strip()
+
+    async def execute(
+        subagent_type: str,
+        prompt: str,
+        background: bool = True,
+        task_description: str | None = None,
+    ) -> str:
+        result = await original_tool(
+            subagent_type=subagent_type,
+            prompt=prompt,
+            background=background,
+            task_description=task_description,
+        )
+        agent_span_id = getattr(original_tool, "agent_span_id", None)
+        if agent_span_id is not None:
+            setattr(execute, "agent_span_id", agent_span_id)
+        return result
+
+    return ToolDef(
+        execute,
+        name=original_def.name,
+        description=original_def.description,
+        parameters=parameters,
+        parallel=original_def.parallel,
+        viewer=original_def.viewer,
+        model_input=original_def.model_input,
+        options=original_def.options,
+    ).as_tool()
+
+
+@agent(name=WORKFLOW_NAME, description="DeepAgent MAS orchestrator.")
+def _deepagent_with_background_default(base_agent: Agent) -> Agent:
+    """Wrap DeepAgent execution so its constructed agent tool defaults async."""
+
+    async def execute(state: AgentState) -> AgentState:
+        original_agent_tool = _DEEPAGENT_MODULE.agent_tool
+
+        def patched_agent_tool(*args: Any, **kwargs: Any) -> Tool:
+            try:
+                return _agent_tool_with_background_default(
+                    original_agent_tool(*args, **kwargs)
+                )
+            finally:
+                if _DEEPAGENT_MODULE.agent_tool is patched_agent_tool:
+                    _DEEPAGENT_MODULE.agent_tool = original_agent_tool
+
+        _DEEPAGENT_MODULE.agent_tool = patched_agent_tool
+        try:
+            return await base_agent(state)
+        finally:
+            if _DEEPAGENT_MODULE.agent_tool is patched_agent_tool:
+                _DEEPAGENT_MODULE.agent_tool = original_agent_tool
+
+    return execute
+
+
+def build_deepagent_mas(
+    *,
+    task_tools: Sequence[Tool | ToolDef | ToolSource],
+    model: str | Model | None = None,
+    background_cap: int = 5,
+    attempts: int = 2,
+) -> Agent:
+    """Build the reference DeepAgent MAS solver with async dispatch defaulted."""
+    base_agent = deepagent(
+        tools=list(task_tools),
+        subagents=[
+            general(
+                instructions=GENERAL_SUBAGENT_INSTRUCTIONS,
+                memory=False,
+            )
+        ],
+        background=background_cap,
+        memory=False,
+        todo_write=False,
+        model=model,
+        attempts=attempts,
+        submit=True,
+        instructions=ORCHESTRATOR_INSTRUCTIONS,
+    )
+    return _deepagent_with_background_default(base_agent)
+
+
+def collect_deepagent_metadata(
+    agent_state: AgentState,
+    *,
+    background_cap: int,
+) -> dict[str, Any]:
+    """Extract orchestrator-visible DeepAgent facts from the final state."""
+    model_calls = 0
+    tool_calls = 0
+    dispatch_calls = 0
+    lifecycle_calls = 0
+    dispatches: list[dict[str, Any]] = []
+    agent_results_by_call_id = {
+        message.tool_call_id: str(message.content)
+        for message in agent_state.messages
+        if isinstance(message, ChatMessageTool)
+        and message.function == "agent"
+        and message.tool_call_id
+    }
+
+    for message in agent_state.messages:
+        if not isinstance(message, ChatMessageAssistant):
+            continue
+        model_calls += 1
+        for tool_call in message.tool_calls or []:
+            tool_calls += 1
+            args = tool_call.arguments or {}
+            if tool_call.function == "agent":
+                dispatch_calls += 1
+                result_text = agent_results_by_call_id.get(tool_call.id, "")
+                inferred_background = bool(args.get("background", False)) or bool(
+                    BACKGROUND_DISPATCH_RE.search(result_text)
+                )
+                dispatches.append(
+                    {
+                        "tool_call_id": tool_call.id,
+                        "subagent_type": str(args.get("subagent_type", ""))[:100],
+                        "background": inferred_background,
+                        "task_description": str(
+                            args.get("task_description", "")
+                        )[:500],
+                        "prompt": str(args.get("prompt", ""))[:1000],
+                    }
+                )
+            elif tool_call.function in LIFECYCLE_TOOLS:
+                lifecycle_calls += 1
+
+    return {
+        "mas_enabled": True,
+        "mas_workflow": WORKFLOW_NAME,
+        "mas_background_cap": background_cap,
+        "mas_agent_dispatch_calls": dispatch_calls,
+        "mas_lifecycle_tool_calls": lifecycle_calls,
+        "mas_orchestrator_model_calls": model_calls,
+        "mas_orchestrator_tool_calls": tool_calls,
+        "mas_dispatches": dispatches,
+    }
 
 SAMPLE_FILES = {
     "calendar/week.md": """# Calendar: next week
@@ -159,20 +322,11 @@ def dynamic_mas(model: str = MODEL) -> Task:
                 files=SAMPLE_FILES,
             )
         ],
-        solver=deepagent(
-            tools=[read_file(), list_files(), grep()],
-            subagents=[
-                general(
-                    instructions=GENERAL_SUBAGENT_INSTRUCTIONS,
-                    memory=False,
-                )
-            ],
-            background=5,
-            memory=False,
-            todo_write=False,
-            instructions=ORCHESTRATOR_INSTRUCTIONS,
+        solver=build_deepagent_mas(
+            task_tools=[read_file(), list_files(), grep()],
+            model=model,
+            background_cap=5,
             attempts=2,
-            submit=True,
         ),
         scorer=includes(),
         model=model,

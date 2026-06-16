@@ -1,0 +1,433 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>deterministic_launcher.eval / deterministic_launcher</title>
+<style>
+:root {
+  --lane-width: 78ch;
+  --block-width: 70ch;
+  --message: #d9e8ff;
+  --message-border: #3b73d9;
+  --reasoning: #eceff3;
+  --reasoning-border: #7c8798;
+  --tool-call: #e7eaef;
+  --tool-call-border: #5f6b7a;
+  --tool-result: #fff4a8;
+  --tool-result-border: #b59b00;
+  --info: #f8fafc;
+  --line: #8b95a5;
+  --bg: #f6f7f9;
+  --text: #17202a;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  overflow-x: auto;
+}
+header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: #ffffff;
+  border-bottom: 1px solid #d7dce3;
+  padding: 14px 18px;
+}
+h1 { margin: 0 0 8px; font-size: 18px; letter-spacing: 0; }
+.meta, .legend { display: flex; flex-wrap: wrap; gap: 8px 14px; }
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #3d4653;
+  white-space: nowrap;
+}
+.swatch {
+  width: 14px;
+  height: 14px;
+  border: 2px solid;
+  border-radius: 3px;
+}
+.swatch.message { background: var(--message); border-color: var(--message-border); }
+.swatch.reasoning { background: var(--reasoning); border-color: var(--reasoning-border); }
+.swatch.tool-call { background: var(--tool-call); border-color: var(--tool-call-border); }
+.swatch.tool-result { background: var(--tool-result); border-color: var(--tool-result-border); }
+.timeline {
+  padding: 16px;
+  min-width: max-content;
+}
+.task-context {
+  width: min(100%, calc(312ch + 42px));
+  background: #ffffff;
+  border: 1px solid #d7dce3;
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 14px;
+}
+.task-context h2 {
+  margin: 0 0 8px;
+  font-size: 15px;
+  letter-spacing: 0;
+}
+.context-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin-bottom: 8px;
+}
+.task-context details {
+  margin: 8px 0;
+}
+.task-context .markdown-body,
+.task-context .code {
+  max-width: min(110ch, 100%);
+}
+.tool-detail {
+  background: #ffffff;
+}
+.trace-grid {
+  display: grid;
+  grid-template-columns: repeat(var(--lane-count), minmax(var(--lane-width), var(--lane-width)));
+  gap: 0 14px;
+  align-items: stretch;
+  min-width: max-content;
+}
+.lane-header {
+  background: #ffffff;
+  border: 1px solid #d7dce3;
+  border-bottom: 0;
+  border-radius: 8px 8px 0 0;
+  padding: 12px;
+  width: var(--lane-width);
+}
+.lane-header h2 {
+  margin: 0;
+  font-size: 15px;
+  letter-spacing: 0;
+}
+.lane-meta {
+  margin: 3px 0 10px;
+  color: #667085;
+  font-size: 12px;
+}
+details {
+  margin: 8px 0;
+  border: 1px solid #e1e5eb;
+  border-radius: 6px;
+  padding: 6px 8px;
+  background: #fbfcfe;
+}
+summary { cursor: pointer; color: #475467; }
+.thread-cell {
+  position: relative;
+  width: var(--lane-width);
+  min-height: 16px;
+  background: #ffffff;
+  border-left: 1px solid #d7dce3;
+  border-right: 1px solid #d7dce3;
+  padding: 0 12px 0 34px;
+}
+.thread-cell::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 20px;
+  width: 2px;
+  background: var(--line);
+}
+.thread-cell.has-block {
+  padding-top: 6px;
+  padding-bottom: 6px;
+}
+.thread-cell.last-row {
+  border-bottom: 1px solid #d7dce3;
+  border-radius: 0 0 8px 8px;
+  padding-bottom: 16px;
+}
+.block {
+  position: relative;
+  margin: 8px 0;
+  border: 2px solid;
+  border-radius: 8px;
+  padding: 8px 10px;
+  box-shadow: 0 1px 2px rgba(17, 24, 39, 0.08);
+  width: min(100%, calc(var(--block-width) + 24px));
+}
+.block::before {
+  content: "";
+  position: absolute;
+  left: -22px;
+  top: 14px;
+  width: 12px;
+  height: 12px;
+  border: 2px solid currentColor;
+  border-radius: 50%;
+  background: #ffffff;
+}
+.block::after {
+  content: "";
+  position: absolute;
+  left: -10px;
+  top: 20px;
+  width: 10px;
+  height: 2px;
+  background: currentColor;
+}
+.block-title {
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+.block-content {
+  max-width: var(--block-width);
+}
+.block pre, details pre {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.markdown-body {
+  max-width: var(--block-width);
+}
+.markdown-body p {
+  margin: 0 0 8px;
+}
+.markdown-body p:last-child {
+  margin-bottom: 0;
+}
+.markdown-body h3,
+.markdown-body h4,
+.markdown-body h5,
+.markdown-body h6 {
+  margin: 8px 0 6px;
+  font-size: 13px;
+  letter-spacing: 0;
+}
+.markdown-body ul,
+.markdown-body ol {
+  margin: 6px 0 6px 20px;
+  padding: 0;
+}
+.markdown-body code {
+  background: rgba(15, 23, 42, 0.08);
+  border-radius: 4px;
+  padding: 1px 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+.tool-name {
+  display: inline-block;
+  margin-bottom: 6px;
+  border-radius: 5px;
+  background: rgba(15, 23, 42, 0.10);
+  padding: 2px 7px;
+  color: #263241;
+  font: 700 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.arg-label {
+  margin: 0 0 4px;
+  color: #475467;
+  font: 700 11px/1.3 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  text-transform: uppercase;
+}
+.code {
+  max-width: var(--block-width);
+  background: rgba(255, 255, 255, 0.52);
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  border-radius: 6px;
+  padding: 8px;
+}
+.message { background: var(--message); border-color: var(--message-border); color: var(--message-border); }
+.reasoning { background: var(--reasoning); border-color: var(--reasoning-border); color: var(--reasoning-border); }
+.tool-call { background: var(--tool-call); border-color: var(--tool-call-border); color: var(--tool-call-border); }
+.tool-result { background: var(--tool-result); border-color: var(--tool-result-border); color: var(--tool-result-border); }
+.user, .info { background: var(--info); border-color: #c7ced8; color: #647084; }
+.message pre, .reasoning pre, .tool-call pre, .tool-result pre, .user pre, .info pre,
+.message .markdown-body, .reasoning .markdown-body, .tool-call .markdown-body,
+.tool-result .markdown-body, .user .markdown-body, .info .markdown-body {
+  color: var(--text);
+}
+pre { line-height: 125%; }
+td.linenos .normal { color: #666666; background-color: transparent; padding-left: 5px; padding-right: 5px; }
+span.linenos { color: #666666; background-color: transparent; padding-left: 5px; padding-right: 5px; }
+td.linenos .special { color: #000000; background-color: #ffffc0; padding-left: 5px; padding-right: 5px; }
+span.linenos.special { color: #000000; background-color: #ffffc0; padding-left: 5px; padding-right: 5px; }
+.code .hll { background-color: #ffffcc }
+.code { background: #f0f0f0; }
+.code .c { color: #60A0B0; font-style: italic } /* Comment */
+.code .err { border: 1px solid #F00 } /* Error */
+.code .k { color: #007020; font-weight: bold } /* Keyword */
+.code .o { color: #666 } /* Operator */
+.code .ch { color: #60A0B0; font-style: italic } /* Comment.Hashbang */
+.code .cm { color: #60A0B0; font-style: italic } /* Comment.Multiline */
+.code .cp { color: #007020 } /* Comment.Preproc */
+.code .cpf { color: #60A0B0; font-style: italic } /* Comment.PreprocFile */
+.code .c1 { color: #60A0B0; font-style: italic } /* Comment.Single */
+.code .cs { color: #60A0B0; background-color: #FFF0F0 } /* Comment.Special */
+.code .gd { color: #A00000 } /* Generic.Deleted */
+.code .ge { font-style: italic } /* Generic.Emph */
+.code .ges { font-weight: bold; font-style: italic } /* Generic.EmphStrong */
+.code .gr { color: #F00 } /* Generic.Error */
+.code .gh { color: #000080; font-weight: bold } /* Generic.Heading */
+.code .gi { color: #00A000 } /* Generic.Inserted */
+.code .go { color: #888 } /* Generic.Output */
+.code .gp { color: #C65D09; font-weight: bold } /* Generic.Prompt */
+.code .gs { font-weight: bold } /* Generic.Strong */
+.code .gu { color: #800080; font-weight: bold } /* Generic.Subheading */
+.code .gt { color: #04D } /* Generic.Traceback */
+.code .kc { color: #007020; font-weight: bold } /* Keyword.Constant */
+.code .kd { color: #007020; font-weight: bold } /* Keyword.Declaration */
+.code .kn { color: #007020; font-weight: bold } /* Keyword.Namespace */
+.code .kp { color: #007020 } /* Keyword.Pseudo */
+.code .kr { color: #007020; font-weight: bold } /* Keyword.Reserved */
+.code .kt { color: #902000 } /* Keyword.Type */
+.code .m { color: #40A070 } /* Literal.Number */
+.code .s { color: #4070A0 } /* Literal.String */
+.code .na { color: #4070A0 } /* Name.Attribute */
+.code .nb { color: #007020 } /* Name.Builtin */
+.code .nc { color: #0E84B5; font-weight: bold } /* Name.Class */
+.code .no { color: #60ADD5 } /* Name.Constant */
+.code .nd { color: #555; font-weight: bold } /* Name.Decorator */
+.code .ni { color: #D55537; font-weight: bold } /* Name.Entity */
+.code .ne { color: #007020 } /* Name.Exception */
+.code .nf { color: #06287E } /* Name.Function */
+.code .nl { color: #002070; font-weight: bold } /* Name.Label */
+.code .nn { color: #0E84B5; font-weight: bold } /* Name.Namespace */
+.code .nt { color: #062873; font-weight: bold } /* Name.Tag */
+.code .nv { color: #BB60D5 } /* Name.Variable */
+.code .ow { color: #007020; font-weight: bold } /* Operator.Word */
+.code .w { color: #BBB } /* Text.Whitespace */
+.code .mb { color: #40A070 } /* Literal.Number.Bin */
+.code .mf { color: #40A070 } /* Literal.Number.Float */
+.code .mh { color: #40A070 } /* Literal.Number.Hex */
+.code .mi { color: #40A070 } /* Literal.Number.Integer */
+.code .mo { color: #40A070 } /* Literal.Number.Oct */
+.code .sa { color: #4070A0 } /* Literal.String.Affix */
+.code .sb { color: #4070A0 } /* Literal.String.Backtick */
+.code .sc { color: #4070A0 } /* Literal.String.Char */
+.code .dl { color: #4070A0 } /* Literal.String.Delimiter */
+.code .sd { color: #4070A0; font-style: italic } /* Literal.String.Doc */
+.code .s2 { color: #4070A0 } /* Literal.String.Double */
+.code .se { color: #4070A0; font-weight: bold } /* Literal.String.Escape */
+.code .sh { color: #4070A0 } /* Literal.String.Heredoc */
+.code .si { color: #70A0D0; font-style: italic } /* Literal.String.Interpol */
+.code .sx { color: #C65D09 } /* Literal.String.Other */
+.code .sr { color: #235388 } /* Literal.String.Regex */
+.code .s1 { color: #4070A0 } /* Literal.String.Single */
+.code .ss { color: #517918 } /* Literal.String.Symbol */
+.code .bp { color: #007020 } /* Name.Builtin.Pseudo */
+.code .fm { color: #06287E } /* Name.Function.Magic */
+.code .vc { color: #BB60D5 } /* Name.Variable.Class */
+.code .vg { color: #BB60D5 } /* Name.Variable.Global */
+.code .vi { color: #BB60D5 } /* Name.Variable.Instance */
+.code .vm { color: #BB60D5 } /* Name.Variable.Magic */
+.code .il { color: #40A070 } /* Literal.Number.Integer.Long */
+@media (max-width: 900px) {
+  .timeline {
+    padding: 12px;
+  }
+  .task-context {
+    width: auto;
+  }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>deterministic_launcher.eval / deterministic_launcher</h1>
+  <div class="meta">
+    <span class="pill">sample: deterministic_launcher</span>
+    <span class="pill">wall-clock: 24.00s</span>
+    <span class="pill">background agents: 3</span>
+    <span class="pill">synchronous subagents: 0</span>
+  </div>
+  <div class="legend" aria-label="legend">
+    <span class="pill"><span class="swatch message"></span>agent message</span>
+    <span class="pill"><span class="swatch reasoning"></span>reasoning</span>
+    <span class="pill"><span class="swatch tool-call"></span>tool call</span>
+    <span class="pill"><span class="swatch tool-result"></span>tool result</span>
+  </div>
+</header>
+<main class="timeline">
+<section class="task-context"><h2>Task Context</h2><div class="context-summary"><span class="pill">task_name: deterministic_launcher</span><span class="pill">category: renderer-fixture</span></div><details open><summary>input</summary><div class="markdown-body"><p>Deterministic launcher demo. Start three peer agents at time zero with fixed branch tasks, then collect their reports and assemble the final routing code.</p></div></details><details><summary>target</summary><div class="markdown-body"><p>ALPHA-BRAVO-CHARLIE</p></div></details><details><summary>metadata</summary><pre class="code language-json"><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;agent_count&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">3</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;category&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;renderer-fixture&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;launcher_role&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;fixed-dispatch-only&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;mas_shape&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;peer_start_via_deterministic_launcher&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;root_lane_label&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Launcher&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;root_lane_meta&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;fixed dispatch and collection&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="nt">&quot;task_name&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;deterministic_launcher&quot;</span>
+<span class="p">}</span></code></pre></details><details><summary>sandbox</summary><pre class="code language-text"><code>SandboxEnvironmentSpec(type=&#39;local&#39;)</code></pre></details><details><summary>system prompt</summary><div class="markdown-body"><p>This synthetic trace visualizes many parallel starting agents using a deterministic launcher lane. The launcher does not choose the decomposition.</p></div></details><details><summary>available tools: bash, python, agent, agent_wait, submit_answer</summary><details class="tool-detail"><summary>bash</summary><div class="markdown-body"><p>Use this function to execute bash commands.</p></div><pre class="code language-json"><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;properties&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;command&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;string&quot;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">&quot;required&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">    </span><span class="s2">&quot;command&quot;</span>
+<span class="w">  </span><span class="p">],</span>
+<span class="w">  </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;object&quot;</span>
+<span class="p">}</span></code></pre></details><details class="tool-detail"><summary>python</summary><div class="markdown-body"><p>Use this function to execute Python code.</p></div><pre class="code language-json"><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;properties&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;code&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;string&quot;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">&quot;required&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">    </span><span class="s2">&quot;code&quot;</span>
+<span class="w">  </span><span class="p">],</span>
+<span class="w">  </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;object&quot;</span>
+<span class="p">}</span></code></pre></details><details class="tool-detail"><summary>agent</summary><div class="markdown-body"><p>Dispatch a background subagent.</p></div><pre class="code language-json"><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;properties&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;background&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;boolean&quot;</span>
+<span class="w">    </span><span class="p">},</span>
+<span class="w">    </span><span class="nt">&quot;prompt&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;string&quot;</span>
+<span class="w">    </span><span class="p">},</span>
+<span class="w">    </span><span class="nt">&quot;subagent_type&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;string&quot;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">&quot;required&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">    </span><span class="s2">&quot;subagent_type&quot;</span><span class="p">,</span>
+<span class="w">    </span><span class="s2">&quot;prompt&quot;</span>
+<span class="w">  </span><span class="p">],</span>
+<span class="w">  </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;object&quot;</span>
+<span class="p">}</span></code></pre></details><details class="tool-detail"><summary>agent_wait</summary><div class="markdown-body"><p>Wait for one or more background agents.</p></div><pre class="code language-json"><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;properties&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;agent_ids&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">&quot;items&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">        </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;string&quot;</span>
+<span class="w">      </span><span class="p">},</span>
+<span class="w">      </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;array&quot;</span>
+<span class="w">    </span><span class="p">},</span>
+<span class="w">    </span><span class="nt">&quot;mode&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;string&quot;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;object&quot;</span>
+<span class="p">}</span></code></pre></details><details class="tool-detail"><summary>submit_answer</summary><div class="markdown-body"><p>Submit the final answer.</p></div><pre class="code language-json"><code><span class="p">{</span>
+<span class="w">  </span><span class="nt">&quot;properties&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">&quot;answer&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;string&quot;</span>
+<span class="w">    </span><span class="p">}</span>
+<span class="w">  </span><span class="p">},</span>
+<span class="w">  </span><span class="nt">&quot;required&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">    </span><span class="s2">&quot;answer&quot;</span>
+<span class="w">  </span><span class="p">],</span>
+<span class="w">  </span><span class="nt">&quot;type&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;object&quot;</span>
+<span class="p">}</span></code></pre></details></details></section>
+<section class="trace-grid" style="--lane-count: 4;"><section class="lane-header" style="grid-column: 1; grid-row: 1;"><h2>Launcher</h2><p class="lane-meta">fixed dispatch and collection</p></section><section class="lane-header" style="grid-column: 2; grid-row: 1;"><h2>AGENT-1 general</h2><p class="lane-meta">background · active +0:01.00 to +0:16.00</p></section><section class="lane-header" style="grid-column: 3; grid-row: 1;"><h2>AGENT-2 general</h2><p class="lane-meta">background · active +0:02.00 to +0:17.00</p></section><section class="lane-header" style="grid-column: 4; grid-row: 1;"><h2>AGENT-3 general</h2><p class="lane-meta">background · active +0:03.00 to +0:18.00</p></section><div class="thread-cell has-block" style="grid-column: 1; grid-row: 2;"><article class="block info"><div class="block-title">+0:00.00 info</div><div class="block-content"><div class="markdown-body"><p>Fixed launcher starts AGENT-A, AGENT-B, and AGENT-C from a predefined assignment table. No model chooses the decomposition.</p></div></div></article></div><div class="thread-cell" style="grid-column: 2; grid-row: 2;"></div><div class="thread-cell" style="grid-column: 3; grid-row: 2;"></div><div class="thread-cell" style="grid-column: 4; grid-row: 2;"></div><div class="thread-cell" style="grid-column: 1; grid-row: 3;"></div><div class="thread-cell has-block" style="grid-column: 2; grid-row: 3;"><article class="block user"><div class="block-title">+0:05.00 input</div><div class="block-content"><div class="markdown-body"><p>You are AGENT-A. Inspect only the calendar branch. Report the routing fragment and the meeting fact. Do not solve other branches.</p></div></div></article><article class="block reasoning"><div class="block-title">+0:05.00 turn 1 reasoning</div><div class="block-content"><div class="markdown-body"><p>Read the assigned calendar file and stop.</p></div></div></article><article class="block tool-call"><div class="block-title">+0:05.00 turn 1 tool call</div><div class="block-content"><div class="tool-name">bash</div><div class="arg-label">command</div><pre class="code language-bash"><code>cat<span class="w"> </span>calendar/week.md</code></pre></div></article></div><div class="thread-cell" style="grid-column: 3; grid-row: 3;"></div><div class="thread-cell" style="grid-column: 4; grid-row: 3;"></div><div class="thread-cell" style="grid-column: 1; grid-row: 4;"></div><div class="thread-cell" style="grid-column: 2; grid-row: 4;"></div><div class="thread-cell has-block" style="grid-column: 3; grid-row: 4;"><article class="block user"><div class="block-title">+0:06.00 input</div><div class="block-content"><div class="markdown-body"><p>You are AGENT-B. Inspect only the email branch. Report the routing fragment and preference fact. Do not solve other branches.</p></div></div></article><article class="block reasoning"><div class="block-title">+0:06.00 turn 1 reasoning</div><div class="block-content"><div class="markdown-body"><p>Read the assigned email file and stop.</p></div></div></article><article class="block tool-call"><div class="block-title">+0:06.00 turn 1 tool call</div><div class="block-content"><div class="tool-name">bash</div><div class="arg-label">command</div><pre class="code language-bash"><code>cat<span class="w"> </span>email/launch_review.md</code></pre></div></article></div><div class="thread-cell" style="grid-column: 4; grid-row: 4;"></div><div class="thread-cell" style="grid-column: 1; grid-row: 5;"></div><div class="thread-cell" style="grid-column: 2; grid-row: 5;"></div><div class="thread-cell" style="grid-column: 3; grid-row: 5;"></div><div class="thread-cell has-block" style="grid-column: 4; grid-row: 5;"><article class="block user"><div class="block-title">+0:07.00 input</div><div class="block-content"><div class="markdown-body"><p>You are AGENT-C. Inspect only the contacts branch. Report the routing fragment and contact fact. Do not solve other branches.</p></div></div></article><article class="block reasoning"><div class="block-title">+0:07.00 turn 1 reasoning</div><div class="block-content"><div class="markdown-body"><p>Read the assigned contacts file and stop.</p></div></div></article><article class="block tool-call"><div class="block-title">+0:07.00 turn 1 tool call</div><div class="block-content"><div class="tool-name">bash</div><div class="arg-label">command</div><pre class="code language-bash"><code>cat<span class="w"> </span>contacts.md</code></pre></div></article></div><div class="thread-cell" style="grid-column: 1; grid-row: 6;"></div><div class="thread-cell has-block" style="grid-column: 2; grid-row: 6;"><article class="block tool-result"><div class="block-title">+0:09.00 tool result: bash</div><div class="block-content"><pre class="code language-bash"><code><span class="m">2026</span>-06-17<span class="w"> </span><span class="m">14</span>:00<span class="w"> </span>Launch<span class="w"> </span>review
+Routing<span class="w"> </span>fragment:<span class="w"> </span>ALPHA
+Meeting<span class="w"> </span>owner:<span class="w"> </span>Mina</code></pre></div></article></div><div class="thread-cell" style="grid-column: 3; grid-row: 6;"></div><div class="thread-cell" style="grid-column: 4; grid-row: 6;"></div><div class="thread-cell" style="grid-column: 1; grid-row: 7;"></div><div class="thread-cell" style="grid-column: 2; grid-row: 7;"></div><div class="thread-cell has-block" style="grid-column: 3; grid-row: 7;"><article class="block tool-result"><div class="block-title">+0:10.00 tool result: bash</div><div class="block-content"><pre class="code language-bash"><code>Mina<span class="w"> </span>requested<span class="w"> </span>the<span class="w"> </span>launch<span class="w"> </span>checklist<span class="w"> </span>link.
+Routing<span class="w"> </span>fragment:<span class="w"> </span>BRAVO</code></pre></div></article></div><div class="thread-cell" style="grid-column: 4; grid-row: 7;"></div><div class="thread-cell" style="grid-column: 1; grid-row: 8;"></div><div class="thread-cell" style="grid-column: 2; grid-row: 8;"></div><div class="thread-cell" style="grid-column: 3; grid-row: 8;"></div><div class="thread-cell has-block" style="grid-column: 4; grid-row: 8;"><article class="block tool-result"><div class="block-title">+0:11.00 tool result: bash</div><div class="block-content"><pre class="code language-bash"><code>Mina:<span class="w"> </span>mina@example.test
+Routing<span class="w"> </span>fragment:<span class="w"> </span>CHARLIE</code></pre></div></article></div><div class="thread-cell" style="grid-column: 1; grid-row: 9;"></div><div class="thread-cell has-block" style="grid-column: 2; grid-row: 9;"><article class="block message"><div class="block-title">+0:13.00 turn 2 agent message</div><div class="block-content"><div class="markdown-body"><p>Result: calendar branch reports fragment ALPHA and owner Mina for the Launch review. Confidence: high.</p></div></div></article></div><div class="thread-cell" style="grid-column: 3; grid-row: 9;"></div><div class="thread-cell" style="grid-column: 4; grid-row: 9;"></div><div class="thread-cell" style="grid-column: 1; grid-row: 10;"></div><div class="thread-cell" style="grid-column: 2; grid-row: 10;"></div><div class="thread-cell has-block" style="grid-column: 3; grid-row: 10;"><article class="block message"><div class="block-title">+0:14.00 turn 2 agent message</div><div class="block-content"><div class="markdown-body"><p>Result: email branch reports fragment BRAVO and checklist preference for Mina. Confidence: high.</p></div></div></article></div><div class="thread-cell" style="grid-column: 4; grid-row: 10;"></div><div class="thread-cell" style="grid-column: 1; grid-row: 11;"></div><div class="thread-cell" style="grid-column: 2; grid-row: 11;"></div><div class="thread-cell" style="grid-column: 3; grid-row: 11;"></div><div class="thread-cell has-block" style="grid-column: 4; grid-row: 11;"><article class="block message"><div class="block-title">+0:15.00 turn 2 agent message</div><div class="block-content"><div class="markdown-body"><p>Result: contacts branch reports fragment CHARLIE and mina@example.test. Confidence: high.</p></div></div></article></div><div class="thread-cell has-block" style="grid-column: 1; grid-row: 12;"><article class="block info"><div class="block-title">+0:20.00 info</div><div class="block-content"><div class="markdown-body"><p>Fixed launcher collects all completed peer reports:<br>AGENT-1: fragment ALPHA, Launch review owner Mina.<br>AGENT-2: fragment BRAVO, Mina wants the checklist link.<br>AGENT-3: fragment CHARLIE, Mina contact mina@example.test.</p></div></div></article></div><div class="thread-cell" style="grid-column: 2; grid-row: 12;"></div><div class="thread-cell" style="grid-column: 3; grid-row: 12;"></div><div class="thread-cell" style="grid-column: 4; grid-row: 12;"></div><div class="thread-cell has-block last-row" style="grid-column: 1; grid-row: 13;"><article class="block info"><div class="block-title">+0:24.00 info</div><div class="block-content"><div class="markdown-body"><p>Routing code: ALPHA-BRAVO-CHARLIE. Send Mina the launch checklist link at mina@example.test.</p></div></div></article></div><div class="thread-cell last-row" style="grid-column: 2; grid-row: 13;"></div><div class="thread-cell last-row" style="grid-column: 3; grid-row: 13;"></div><div class="thread-cell last-row" style="grid-column: 4; grid-row: 13;"></div></section>
+</main>
+</body>
+</html>

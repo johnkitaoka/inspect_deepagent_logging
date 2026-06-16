@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import glob
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -46,6 +47,13 @@ def background_span_ids(events: list[Any]) -> list[str]:
     span_ids: list[str] = []
     for event in events:
         if event.event != "tool" or getattr(event, "function", None) != "agent":
+            continue
+        args = getattr(event, "arguments", {}) or {}
+        result = str(getattr(event, "result", "") or "")
+        is_background = bool(args.get("background")) or bool(
+            re.search(r"\bAGENT-\d+\b", result)
+        )
+        if not is_background:
             continue
         span_id = getattr(event, "agent_span_id", None)
         if span_id is not None:

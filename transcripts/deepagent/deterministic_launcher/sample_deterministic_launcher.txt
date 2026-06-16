@@ -1,0 +1,106 @@
+# log: deterministic_launcher.eval
+# sample: deterministic_launcher
+# wall-clock: 24.00s
+# background agents: 3
+# synchronous subagents: 0
+
+===== TASK CONTEXT =====
+input:
+  Deterministic launcher demo. Start three peer agents at time zero with fixed branch tasks, then collect their reports and assemble the final routing code.
+
+target:
+  ALPHA-BRAVO-CHARLIE
+
+metadata:
+  {
+    "agent_count": 3,
+    "category": "renderer-fixture",
+    "launcher_role": "fixed-dispatch-only",
+    "mas_shape": "peer_start_via_deterministic_launcher",
+    "root_lane_label": "Launcher",
+    "root_lane_meta": "fixed dispatch and collection",
+    "task_name": "deterministic_launcher"
+  }
+
+sandbox:
+  SandboxEnvironmentSpec(type='local')
+
+system prompt:
+  This synthetic trace visualizes many parallel starting agents using a deterministic launcher lane. The launcher does not choose the decomposition.
+
+available tools:
+  bash, python, agent, agent_wait, submit_answer
+
+===== LAUNCHER =====
+[+0:00.00] user/system update:
+    Fixed launcher starts AGENT-A, AGENT-B, and AGENT-C from a predefined assignment table. No model chooses the decomposition.
+
+[+0:20.00] user/system update:
+    Fixed launcher collects all completed peer reports:
+    AGENT-1: fragment ALPHA, Launch review owner Mina.
+    AGENT-2: fragment BRAVO, Mina wants the checklist link.
+    AGENT-3: fragment CHARLIE, Mina contact mina@example.test.
+
+[+0:24.00] user/system update:
+    Routing code: ALPHA-BRAVO-CHARLIE. Send Mina the launch checklist link at mina@example.test.
+
+
+===== BACKGROUND AGENT: AGENT-1 general =====
+dispatched +0:01.00 -> completed +0:16.00
+
+[+0:05.00] turn 1
+  user:
+    You are AGENT-A. Inspect only the calendar branch. Report the routing fragment and the meeting fact. Do not solve other branches.
+
+[+0:05.00] turn 1
+  assistant tool call:
+    bash({"command": "cat calendar/week.md"})
+
+[+0:09.00] tool result:
+    2026-06-17 14:00 Launch review
+    Routing fragment: ALPHA
+    Meeting owner: Mina
+
+[+0:13.00] turn 2
+  assistant:
+    Result: calendar branch reports fragment ALPHA and owner Mina for the Launch review. Confidence: high.
+
+
+===== BACKGROUND AGENT: AGENT-2 general =====
+dispatched +0:02.00 -> completed +0:17.00
+
+[+0:06.00] turn 1
+  user:
+    You are AGENT-B. Inspect only the email branch. Report the routing fragment and preference fact. Do not solve other branches.
+
+[+0:06.00] turn 1
+  assistant tool call:
+    bash({"command": "cat email/launch_review.md"})
+
+[+0:10.00] tool result:
+    Mina requested the launch checklist link.
+    Routing fragment: BRAVO
+
+[+0:14.00] turn 2
+  assistant:
+    Result: email branch reports fragment BRAVO and checklist preference for Mina. Confidence: high.
+
+
+===== BACKGROUND AGENT: AGENT-3 general =====
+dispatched +0:03.00 -> completed +0:18.00
+
+[+0:07.00] turn 1
+  user:
+    You are AGENT-C. Inspect only the contacts branch. Report the routing fragment and contact fact. Do not solve other branches.
+
+[+0:07.00] turn 1
+  assistant tool call:
+    bash({"command": "cat contacts.md"})
+
+[+0:11.00] tool result:
+    Mina: mina@example.test
+    Routing fragment: CHARLIE
+
+[+0:15.00] turn 2
+  assistant:
+    Result: contacts branch reports fragment CHARLIE and mina@example.test. Confidence: high.

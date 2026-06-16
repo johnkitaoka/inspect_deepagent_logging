@@ -32,10 +32,12 @@ the orchestrator lane.
 
 ![Transcript parallel agent lanes](docs/images/transcript-parallel-agents.png)
 
-The checked-in synthetic example is available here:
+Checked-in synthetic examples are available here:
 
-- [HTML transcript](transcripts/swe_parallel_demo/sample_swe_parallel_completion.html)
-- [Text transcript](transcripts/swe_parallel_demo/sample_swe_parallel_completion.txt)
+- [Orchestrator/subagents HTML](transcripts/deepagent/demo_subagents/sample_demo_subagents.html)
+- [Orchestrator/subagents text](transcripts/deepagent/demo_subagents/sample_demo_subagents.txt)
+- [Deterministic launcher HTML](transcripts/deepagent/deterministic_launcher/sample_deterministic_launcher.html)
+- [Deterministic launcher text](transcripts/deepagent/deterministic_launcher/sample_deterministic_launcher.txt)
 
 ## Install
 
@@ -54,6 +56,8 @@ uv run python -c "import inspect_ai; from inspect_ai.agent import deepagent; imp
 ```bash
 uv run python tests/test_imports.py
 uv run python tests/test_general_subagent_tools.py
+uv run python tests/test_deepagent_mas_builder.py
+uv run python tests/test_transcript_rendering.py
 uv run inspect list tasks deepagent_mas_eval.py
 ```
 
@@ -83,10 +87,16 @@ Print one log as text:
 uv run python scripts/render_transcript.py logs/*.eval --stdout
 ```
 
-Regenerate the synthetic SWE-style parallel transcript:
+Regenerate the synthetic orchestrator/subagent transcript:
 
 ```bash
-uv run python scripts/render_transcript.py --demo-subagents --out-dir transcripts
+uv run python scripts/render_transcript.py --demo-subagents --out-dir transcripts/deepagent
+```
+
+Regenerate the deterministic-launcher peer-start transcript:
+
+```bash
+uv run python scripts/render_transcript.py --demo-launcher --out-dir transcripts/deepagent
 ```
 
 Check whether background-agent spans actually overlap:

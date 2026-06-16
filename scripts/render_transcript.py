@@ -52,6 +52,7 @@ class BackgroundAgent:
     task_description: str
     dispatched: Any
     dispatch_completed: Any
+    background: bool
 
 
 @dataclass
@@ -231,19 +232,24 @@ def parse_handle(result: str) -> str | None:
     return match.group(0) if match else None
 
 
-def collect_background_agents(
+def collect_agent_threads(
     events: Iterable[Any],
     spans: dict[str, Span],
 ) -> dict[str, BackgroundAgent]:
     agents: dict[str, BackgroundAgent] = {}
+    sync_count = 0
     for event in events:
         if event.event != "tool" or getattr(event, "function", None) != "agent":
             continue
         span_id = getattr(event, "agent_span_id", None)
-        handle = parse_handle(str(getattr(event, "result", "")))
-        if span_id is None or handle is None:
+        if span_id is None:
             continue
         args = getattr(event, "arguments", {}) or {}
+        handle = parse_handle(str(getattr(event, "result", "")))
+        is_background = bool(args.get("background")) or handle is not None
+        if handle is None:
+            sync_count += 1
+            handle = f"SUBAGENT-{sync_count}"
         fallback = spans.get(span_id, Span(span_id, "", None, None)).name
         agents[span_id] = BackgroundAgent(
             handle=handle,
@@ -253,6 +259,7 @@ def collect_background_agents(
             task_description=str(args.get("task_description") or ""),
             dispatched=getattr(event, "timestamp", None),
             dispatch_completed=getattr(event, "completed", None),
+            background=is_background,
         )
     return agents
 
@@ -325,7 +332,8 @@ def render_tool_event(event: Any, t0: Any, result_trim: int) -> list[str]:
     error = getattr(event, "error", None)
     if error is not None:
         result = getattr(error, "message", str(error))
-    lines = [f"[{reltime(getattr(event, 'timestamp', None), t0)}] {label}:"]
+    ts = getattr(event, "completed", None) or getattr(event, "timestamp", None)
+    lines = [f"[{reltime(ts, t0)}] {label}:"]
     lines.extend(indented(trim(str(result), result_trim), 4))
     lines.append("")
     return lines
@@ -353,6 +361,8 @@ def render_thread(
     final_submit = ""
     turn = 1
     for event in events:
+        if getattr(event, "hidden_from_timeline", False):
+            continue
         if event.event == "model":
             lines.extend(
                 render_model_event(
@@ -377,10 +387,13 @@ def render_thread(
 def render_sample(log_name: str, sample: Any, result_trim: int) -> str:
     events = list(sample.events or [])
     spans = collect_spans(events)
-    agents_by_span = collect_background_agents(events, spans)
+    agents_by_span = collect_agent_threads(events, spans)
     agents_by_handle = {agent.handle: agent for agent in agents_by_span.values()}
+    background_count = sum(1 for agent in agents_by_span.values() if agent.background)
+    sync_count = len(agents_by_span) - background_count
     t0, t1 = event_time_bounds(events)
     task_context = collect_task_context(sample, events)
+    root_label = str(task_context.metadata.get("root_lane_label") or "ORCHESTRATOR")
 
     by_thread: dict[str, list[Any]] = defaultdict(list)
     for event in events:
@@ -391,7 +404,8 @@ def render_sample(log_name: str, sample: Any, result_trim: int) -> str:
         f"# log: {log_name}",
         f"# sample: {sample.id}",
         f"# wall-clock: {duration(t0, t1)}",
-        f"# background agents: {len(agents_by_span)}",
+        f"# background agents: {background_count}",
+        f"# synchronous subagents: {sync_count}",
         "",
         "===== TASK CONTEXT =====",
         "input:",
@@ -429,7 +443,7 @@ def render_sample(log_name: str, sample: Any, result_trim: int) -> str:
     orchestrator, _ = render_thread(
         by_thread.get("ORCHESTRATOR", []),
         t0,
-        "ORCHESTRATOR",
+        root_label.upper(),
         result_trim,
         include_user_updates=True,
     )
@@ -441,24 +455,17 @@ def render_sample(log_name: str, sample: Any, result_trim: int) -> str:
         span = spans.get(agent.span_id) if agent else None
         start = span.start if span else None
         end = span.end if span else None
+        heading = "BACKGROUND AGENT" if agent and agent.background else "SYNCHRONOUS SUBAGENT"
         lines.append("")
-        lines.append(f"===== BACKGROUND AGENT: {handle} {name} =====")
+        lines.append(f"===== {heading}: {handle} {name} =====")
         lines.append(f"dispatched {reltime(start, t0)} -> completed {reltime(end, t0)}")
-        if agent and agent.task_description:
-            lines.append("")
-            lines.append("task_description:")
-            lines.extend(indented(agent.task_description, 2))
-        if agent and agent.prompt:
-            lines.append("")
-            lines.append("input:")
-            lines.extend(indented(agent.prompt, 2))
         lines.append("")
         thread_lines, final_submit = render_thread(
             by_thread[handle],
             t0,
             f"{handle} THREAD",
             result_trim,
-            include_user_updates=False,
+            include_user_updates=True,
         )
         lines.extend(thread_lines[1:])
         if final_submit:
@@ -726,12 +733,12 @@ def add_model_html_blocks(
                     lane=lane,
                     timestamp=ts,
                     kind="user",
-                title=f"{rel} input",
-                body=trim(text, result_trim),
-                reltime=rel,
-                render_as="markdown",
+                    title=f"{rel} input",
+                    body=trim(text, result_trim),
+                    reltime=rel,
+                    render_as="markdown",
+                )
             )
-        )
 
     output = getattr(event, "output", None)
     if output is None or output.empty:
@@ -807,7 +814,7 @@ def add_tool_html_block(
     t0: Any,
     result_trim: int,
 ) -> None:
-    ts = getattr(event, "timestamp", None)
+    ts = getattr(event, "completed", None) or getattr(event, "timestamp", None)
     rel = reltime(ts, t0)
     function = getattr(event, "function", "")
     label = "lifecycle result" if function in LIFECYCLE_TOOLS else "tool result"
@@ -869,6 +876,8 @@ def collect_html_blocks(
         seen_user_messages: set[str] = set()
         turn = 1
         for event in lane_events:
+            if getattr(event, "hidden_from_timeline", False):
+                continue
             if event.event == "model":
                 add_model_html_blocks(
                     blocks,
@@ -878,7 +887,7 @@ def collect_html_blocks(
                     turn=turn,
                     seen_user_messages=seen_user_messages,
                     result_trim=result_trim,
-                    include_user_updates=lane == "ORCHESTRATOR",
+                    include_user_updates=True,
                 )
                 turn += 1
             elif event.event == "tool":
@@ -906,34 +915,25 @@ def render_html_lane_header(
     agents_by_handle: dict[str, BackgroundAgent],
     spans: dict[str, Span],
     t0: Any,
+    root_label: str = "Orchestrator",
+    root_meta: str = "primary thread",
 ) -> str:
-    title = html.escape(lane_label(lane, agents_by_handle))
+    title = html.escape(root_label if lane == "ORCHESTRATOR" else lane_label(lane, agents_by_handle))
     if lane == "ORCHESTRATOR":
-        return f"<h2>{title}</h2><p class=\"lane-meta\">primary thread</p>"
+        return f"<h2>{title}</h2><p class=\"lane-meta\">{html.escape(root_meta)}</p>"
 
     agent = agents_by_handle.get(lane)
     if agent is None:
-        return f"<h2>{title}</h2><p class=\"lane-meta\">background thread</p>"
+        return f"<h2>{title}</h2><p class=\"lane-meta\">subagent thread</p>"
 
     span = spans.get(agent.span_id)
     active = ""
     if span is not None:
         active = f"{reltime(span.start, t0)} to {reltime(span.end, t0)}"
-    details = []
-    if agent.task_description:
-        details.append(
-            "<details><summary>task description</summary>"
-            f"<pre>{html.escape(agent.task_description)}</pre></details>"
-        )
-    if agent.prompt:
-        details.append(
-            "<details><summary>input prompt</summary>"
-            f"<pre>{html.escape(agent.prompt)}</pre></details>"
-        )
+    mode = "background" if agent.background else "synchronous"
     return (
         f"<h2>{title}</h2>"
-        f"<p class=\"lane-meta\">active {html.escape(active or '?')}</p>"
-        + "".join(details)
+        f"<p class=\"lane-meta\">{mode} · active {html.escape(active or '?')}</p>"
     )
 
 
@@ -1057,6 +1057,8 @@ def render_trace_grid(
     spans: dict[str, Span],
     t0: Any,
     result_trim: int,
+    root_label: str = "Orchestrator",
+    root_meta: str = "primary thread",
 ) -> str:
     lane_count = max(1, len(lane_order))
     timestamps = sorted(
@@ -1073,7 +1075,14 @@ def render_trace_grid(
         cells.append(
             "<section class=\"lane-header\" "
             f"style=\"grid-column: {column}; grid-row: 1;\">"
-            + render_html_lane_header(lane, agents_by_handle, spans, t0)
+            + render_html_lane_header(
+                lane,
+                agents_by_handle,
+                spans,
+                t0,
+                root_label=root_label,
+                root_meta=root_meta,
+            )
             + "</section>"
         )
 
@@ -1103,10 +1112,14 @@ def render_trace_grid(
 def render_sample_html(log_name: str, sample: Any, result_trim: int) -> str:
     events = list(sample.events or [])
     spans = collect_spans(events)
-    agents_by_span = collect_background_agents(events, spans)
+    agents_by_span = collect_agent_threads(events, spans)
     agents_by_handle = {agent.handle: agent for agent in agents_by_span.values()}
+    background_count = sum(1 for agent in agents_by_span.values() if agent.background)
+    sync_count = len(agents_by_span) - background_count
     t0, t1 = event_time_bounds(events)
     task_context = collect_task_context(sample, events)
+    root_label = str(task_context.metadata.get("root_lane_label") or "Orchestrator")
+    root_meta = str(task_context.metadata.get("root_lane_meta") or "primary thread")
 
     by_thread: dict[str, list[Any]] = defaultdict(list)
     for event in events:
@@ -1392,7 +1405,8 @@ summary {{ cursor: pointer; color: #475467; }}
   <div class="meta">
     <span class="pill">sample: {html.escape(str(sample.id))}</span>
     <span class="pill">wall-clock: {html.escape(duration(t0, t1))}</span>
-    <span class="pill">background agents: {len(agents_by_span)}</span>
+    <span class="pill">background agents: {background_count}</span>
+    <span class="pill">synchronous subagents: {sync_count}</span>
   </div>
   <div class="legend" aria-label="legend">
     <span class="pill"><span class="swatch message"></span>agent message</span>
@@ -1403,7 +1417,7 @@ summary {{ cursor: pointer; color: #475467; }}
 </header>
 <main class="timeline">
 {render_task_context_panel(task_context, result_trim)}
-{render_trace_grid(lane_order=lane_order, blocks_by_lane=blocks_by_lane, agents_by_handle=agents_by_handle, spans=spans, t0=t0, result_trim=result_trim)}
+{render_trace_grid(lane_order=lane_order, blocks_by_lane=blocks_by_lane, agents_by_handle=agents_by_handle, spans=spans, t0=t0, result_trim=result_trim, root_label=root_label, root_meta=root_meta)}
 </main>
 </body>
 </html>
@@ -1511,6 +1525,7 @@ def demo_tool_event(
     result: str,
     arguments: dict[str, Any] | None = None,
     agent_span_id: str | None = None,
+    hidden_from_timeline: bool = False,
 ) -> Any:
     return SimpleNamespace(
         event="tool",
@@ -1521,6 +1536,7 @@ def demo_tool_event(
         error=None,
         arguments=arguments or {},
         agent_span_id=agent_span_id,
+        hidden_from_timeline=hidden_from_timeline,
     )
 
 
@@ -1531,8 +1547,8 @@ def build_demo_subagent_sample() -> Any:
     user = SimpleNamespace(
         role="user",
         content=(
-            "SWE-style demo. Fix a small Python package while two background "
-            "agents inspect independent branches: tests and implementation."
+            "Demo only. Fix a small package while two background agents inspect "
+            "independent branches: tests and implementation."
         ),
     )
     events = [
@@ -1824,13 +1840,13 @@ def build_demo_subagent_sample() -> Any:
         ),
     ]
     return SimpleNamespace(
-        id="swe_parallel_completion",
+        id="demo_subagents",
         input=user.content,
         target="",
         metadata={
-            "task_name": "swe_parallel_completion",
+            "task_name": "demo_subagents",
             "docker_image": "synthetic/demo:latest",
-            "category": "swe-style-renderer-fixture",
+            "category": "renderer-fixture",
             "difficulty": "demo",
             "agent_timeout_sec": 900,
             "verifier_timeout_sec": 900,
@@ -1855,7 +1871,283 @@ def build_demo_subagent_sample() -> Any:
 
 def write_demo_subagents(out_dir: Path, result_trim: int, no_html: bool) -> tuple[int, int]:
     sample = build_demo_subagent_sample()
-    log_name = "swe_parallel_demo.eval"
+    text = render_sample("demo_subagents.eval", sample, result_trim)
+    path = output_path(out_dir, "demo_subagents.eval", sample.id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+    html_written = 0
+    if not no_html:
+        html_path = html_output_path(out_dir, "demo_subagents.eval", sample.id)
+        html_path.parent.mkdir(parents=True, exist_ok=True)
+        html_path.write_text(render_sample_html("demo_subagents.eval", sample, result_trim))
+        html_written = 1
+    return 1, html_written
+
+
+def build_demo_launcher_sample() -> Any:
+    """Synthetic peer-start trace rendered through a deterministic launcher lane."""
+    t0 = datetime(2026, 6, 15, 21, 0, tzinfo=timezone.utc)
+    at = lambda seconds: t0 + timedelta(seconds=seconds)
+
+    prompts = {
+        "calendar": (
+            "You are AGENT-A. Inspect only the calendar branch. Report the "
+            "routing fragment and the meeting fact. Do not solve other branches."
+        ),
+        "email": (
+            "You are AGENT-B. Inspect only the email branch. Report the routing "
+            "fragment and preference fact. Do not solve other branches."
+        ),
+        "contacts": (
+            "You are AGENT-C. Inspect only the contacts branch. Report the "
+            "routing fragment and contact fact. Do not solve other branches."
+        ),
+    }
+    user = SimpleNamespace(
+        role="user",
+        content=(
+            "Deterministic launcher demo. Start three peer agents at time zero "
+            "with fixed branch tasks, then collect their reports and assemble "
+            "the final routing code."
+        ),
+    )
+    events = [
+        SimpleNamespace(
+            event="span_begin",
+            id="root",
+            name="deterministic-launcher",
+            parent_id=None,
+            timestamp=at(0),
+        ),
+        SimpleNamespace(
+            event="info",
+            timestamp=at(0),
+            span_id="root",
+            data=(
+                "Fixed launcher starts AGENT-A, AGENT-B, and AGENT-C from a "
+                "predefined assignment table. No model chooses the decomposition."
+            ),
+        ),
+        demo_tool_event(
+            at(1),
+            span_id="root",
+            function="agent",
+            result="Dispatched AGENT-1.",
+            arguments={
+                "subagent_type": "general",
+                "background": True,
+                "task_description": "AGENT-A calendar branch",
+                "prompt": prompts["calendar"],
+            },
+            agent_span_id="agent-a-span",
+            hidden_from_timeline=True,
+        ),
+        demo_tool_event(
+            at(2),
+            span_id="root",
+            function="agent",
+            result="Dispatched AGENT-2.",
+            arguments={
+                "subagent_type": "general",
+                "background": True,
+                "task_description": "AGENT-B email branch",
+                "prompt": prompts["email"],
+            },
+            agent_span_id="agent-b-span",
+            hidden_from_timeline=True,
+        ),
+        demo_tool_event(
+            at(3),
+            span_id="root",
+            function="agent",
+            result="Dispatched AGENT-3.",
+            arguments={
+                "subagent_type": "general",
+                "background": True,
+                "task_description": "AGENT-C contacts branch",
+                "prompt": prompts["contacts"],
+            },
+            agent_span_id="agent-c-span",
+            hidden_from_timeline=True,
+        ),
+        SimpleNamespace(
+            event="span_begin",
+            id="agent-a-span",
+            name="general",
+            parent_id="root",
+            timestamp=at(1),
+        ),
+        SimpleNamespace(
+            event="span_begin",
+            id="agent-b-span",
+            name="general",
+            parent_id="root",
+            timestamp=at(2),
+        ),
+        SimpleNamespace(
+            event="span_begin",
+            id="agent-c-span",
+            name="general",
+            parent_id="root",
+            timestamp=at(3),
+        ),
+        demo_model_event(
+            at(5),
+            span_id="agent-a-span",
+            input_messages=[SimpleNamespace(role="user", content=prompts["calendar"])],
+            message=demo_message(
+                reasoning="Read the assigned calendar file and stop.",
+                tool_calls=[
+                    demo_tool_call(
+                        "bash",
+                        {"command": "cat calendar/week.md"},
+                    )
+                ],
+            ),
+        ),
+        demo_model_event(
+            at(6),
+            span_id="agent-b-span",
+            input_messages=[SimpleNamespace(role="user", content=prompts["email"])],
+            message=demo_message(
+                reasoning="Read the assigned email file and stop.",
+                tool_calls=[
+                    demo_tool_call(
+                        "bash",
+                        {"command": "cat email/launch_review.md"},
+                    )
+                ],
+            ),
+        ),
+        demo_model_event(
+            at(7),
+            span_id="agent-c-span",
+            input_messages=[SimpleNamespace(role="user", content=prompts["contacts"])],
+            message=demo_message(
+                reasoning="Read the assigned contacts file and stop.",
+                tool_calls=[
+                    demo_tool_call(
+                        "bash",
+                        {"command": "cat contacts.md"},
+                    )
+                ],
+            ),
+        ),
+        demo_tool_event(
+            at(9),
+            span_id="agent-a-span",
+            function="bash",
+            result=(
+                "2026-06-17 14:00 Launch review\n"
+                "Routing fragment: ALPHA\n"
+                "Meeting owner: Mina\n"
+            ),
+        ),
+        demo_tool_event(
+            at(10),
+            span_id="agent-b-span",
+            function="bash",
+            result=(
+                "Mina requested the launch checklist link.\n"
+                "Routing fragment: BRAVO\n"
+            ),
+        ),
+        demo_tool_event(
+            at(11),
+            span_id="agent-c-span",
+            function="bash",
+            result=(
+                "Mina: mina@example.test\n"
+                "Routing fragment: CHARLIE\n"
+            ),
+        ),
+        demo_model_event(
+            at(13),
+            span_id="agent-a-span",
+            message=demo_message(
+                text=(
+                    "Result: calendar branch reports fragment ALPHA and owner "
+                    "Mina for the Launch review. Confidence: high."
+                )
+            ),
+        ),
+        demo_model_event(
+            at(14),
+            span_id="agent-b-span",
+            message=demo_message(
+                text=(
+                    "Result: email branch reports fragment BRAVO and checklist "
+                    "preference for Mina. Confidence: high."
+                )
+            ),
+        ),
+        demo_model_event(
+            at(15),
+            span_id="agent-c-span",
+            message=demo_message(
+                text=(
+                    "Result: contacts branch reports fragment CHARLIE and "
+                    "mina@example.test. Confidence: high."
+                )
+            ),
+        ),
+        SimpleNamespace(event="span_end", id="agent-a-span", timestamp=at(16)),
+        SimpleNamespace(event="span_end", id="agent-b-span", timestamp=at(17)),
+        SimpleNamespace(event="span_end", id="agent-c-span", timestamp=at(18)),
+        SimpleNamespace(
+            event="info",
+            span_id="root",
+            timestamp=at(20),
+            data=(
+                "Fixed launcher collects all completed peer reports:\n"
+                "AGENT-1: fragment ALPHA, Launch review owner Mina.\n"
+                "AGENT-2: fragment BRAVO, Mina wants the checklist link.\n"
+                "AGENT-3: fragment CHARLIE, Mina contact mina@example.test."
+            ),
+        ),
+        SimpleNamespace(
+            event="info",
+            timestamp=at(24),
+            span_id="root",
+            data=(
+                "Routing code: ALPHA-BRAVO-CHARLIE. Send Mina the launch "
+                "checklist link at mina@example.test."
+            ),
+        ),
+        SimpleNamespace(event="span_end", id="root", timestamp=at(24)),
+    ]
+    return SimpleNamespace(
+        id="deterministic_launcher",
+        input=user.content,
+        target="ALPHA-BRAVO-CHARLIE",
+        metadata={
+            "task_name": "deterministic_launcher",
+            "category": "renderer-fixture",
+            "mas_shape": "peer_start_via_deterministic_launcher",
+            "launcher_role": "fixed-dispatch-only",
+            "root_lane_label": "Launcher",
+            "root_lane_meta": "fixed dispatch and collection",
+            "agent_count": 3,
+        },
+        sandbox="SandboxEnvironmentSpec(type='local')",
+        messages=[
+            SimpleNamespace(
+                role="system",
+                content=(
+                    "This synthetic trace visualizes many parallel starting "
+                    "agents using a deterministic launcher lane. The launcher "
+                    "does not choose the decomposition."
+                ),
+            ),
+            user,
+        ],
+        events=events,
+    )
+
+
+def write_demo_launcher(out_dir: Path, result_trim: int, no_html: bool) -> tuple[int, int]:
+    sample = build_demo_launcher_sample()
+    log_name = "deterministic_launcher.eval"
     text = render_sample(log_name, sample, result_trim)
     path = output_path(out_dir, log_name, sample.id)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -1872,10 +2164,12 @@ def write_demo_subagents(out_dir: Path, result_trim: int, no_html: bool) -> tupl
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("eval_logs", nargs="*", help=".eval files or glob patterns")
-    parser.add_argument("--out-dir", default="transcripts")
+    parser.add_argument("--out-dir", default="transcripts/deepagent")
     parser.add_argument("--result-trim", type=int, default=4000)
     parser.add_argument("--demo-subagents", action="store_true",
-                        help="Write a synthetic SWE-style multi-subagent transcript demo.")
+                        help="Write a synthetic multi-subagent transcript demo.")
+    parser.add_argument("--demo-launcher", action="store_true",
+                        help="Write a synthetic deterministic-launcher transcript demo.")
     parser.add_argument("--no-html", action="store_true",
                         help="Only write text transcripts.")
     parser.add_argument("--stdout", action="store_true")
@@ -1892,8 +2186,17 @@ def main() -> None:
         text_written += demo_text
         html_written += demo_html
 
+    if args.demo_launcher:
+        demo_text, demo_html = write_demo_launcher(
+            Path(args.out_dir),
+            args.result_trim,
+            args.no_html,
+        )
+        text_written += demo_text
+        html_written += demo_html
+
     eval_files = iter_eval_files(args.eval_logs)
-    if not eval_files and not args.demo_subagents:
+    if not eval_files and not args.demo_subagents and not args.demo_launcher:
         raise SystemExit("No .eval files matched.")
 
     for eval_file in eval_files:
