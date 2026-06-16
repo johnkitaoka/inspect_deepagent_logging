@@ -1,0 +1,160 @@
+# log: 2026-06-16T05-21-30-00-00_live-deepagent-messaging_9cYDUL6nzJEGZFCo7soUPQ.eval
+# sample: live-deepagent-messaging
+# wall-clock: 0.48s
+# background agents: 2
+# synchronous subagents: 0
+
+===== TASK CONTEXT =====
+input:
+  Spawn two general subagents. One should send a mailbox contract note and the other should read it before the orchestrator finishes with LIVE_DEEPAGENT_MESSAGING_DONE.
+
+target:
+  LIVE_DEEPAGENT_MESSAGING_DONE
+
+system prompt:
+  Complete tasks autonomously using your available tools. Act rather than
+  narrate intent — don't say what you plan to do, just do it.
+  
+  Keep going until the task is fully resolved. Don't stop at the first
+  attempt if it doesn't work — diagnose what went wrong and try a
+  different approach. If a tool call fails or returns unexpected results,
+  consider why it failed before retrying. If you find yourself repeating
+  the same action without progress, stop and reassess your approach.
+  
+  Be concise and direct. Avoid preamble, unnecessary explanation, and
+  restating what you've already done. When you need information, use
+  your tools rather than making assumptions.
+  
+  Prioritize parallel tool calls: when operations are independent, run them in one response — e.g. reading several files or running several searches at once — rather than one at a time. Only sequence calls when one depends on another's result.
+  
+  Plan when the task is complex or multi-step. Break large tasks into
+  smaller pieces and track your progress. Verify your work before
+  finishing — check against the original requirements, not against your
+  own output. Confirm the task is actually solved, not just that your
+  steps ran without errors.
+  
+  Cross-check important results from other agents before acting on
+  them — they can miss context or return incomplete findings.
+  
+  Use reasonable defaults rather than asking clarifying questions for
+  every detail. Only ask when genuinely blocked or when the task is
+  fundamentally ambiguous.
+  
+  You can delegate work to specialized subagents using the agent tool.
+  
+  Available subagents:
+  - **general**: Execute a task autonomously using all available tools. Use for substantial work that requires reading, writing, and verifying.
+  
+  Delegate when the work is complex, independent, or would benefit from an isolated context. Do the work directly when it's a simple lookup, a single tool call, or when the result depends on your current conversation state.
+  
+  When delegating, include all necessary context in the prompt — the subagent cannot see your conversation history. Be specific about what information you need back.
+  
+  You can dispatch a subagent in the background with `background=True` on the agent tool — the call returns an `AGENT-N` handle immediately while the subagent runs in parallel with your work. While waiting, do useful independent work in the parent context. Use `agent_status(id)` for a quick non-blocking peek. Use `agent_wait([ids], mode="any"|"all", timeout=...)` when you actually need a result before continuing — prefer one `agent_wait` over a polling loop of `agent_status` calls. Use `agent_cancel(id)` when a background agent is no longer useful. If you may have lost track of background agents — for example after a long stretch of work or after context compaction — call `agent_list()` to recover their state.
+  
+  
+  When you have completed the task and have an answer, call the submit() tool to report it.
+
+available tools:
+  post_message, read_messages, list_agents, agent, agent_status, agent_wait, agent_cancel, agent_list, submit
+
+===== ORCHESTRATOR =====
+[+0:00.27] turn 1
+  user:
+    Spawn two general subagents. One should send a mailbox contract note and the other should read it before the orchestrator finishes with LIVE_DEEPAGENT_MESSAGING_DONE.
+
+[+0:00.27] turn 1
+  assistant tool call:
+    agent({"background": true, "prompt": "contract scout: list active peers, then post the mailbox contract note to AGENT-2.", "subagent_type": "general", "task_description": "Find the coordination contract"})
+
+[+0:00.30] tool result:
+    Dispatched AGENT-1.
+
+[+0:00.30] turn 2
+  assistant tool call:
+    agent({"background": true, "prompt": "implementation reviewer: wait briefly, read your mailbox, then report whether the contract arrived.", "subagent_type": "general", "task_description": "Validate using mailbox evidence"})
+
+[+0:00.31] tool result:
+    Dispatched AGENT-2.
+
+[+0:00.31] turn 3
+  assistant tool call:
+    agent_wait({"agent_ids": ["AGENT-1", "AGENT-2"], "mode": "all"})
+
+[+0:00.47] lifecycle tool result:
+    **AGENT-1** (general) — completed
+    
+    contract note sent to AGENT-2
+    
+    ---
+    
+    **AGENT-2** (general) — completed
+    
+    contract arrived from AGENT-1
+
+[+0:00.47] turn 4
+  assistant tool call:
+    submit({"answer": "LIVE_DEEPAGENT_MESSAGING_DONE"})
+
+[+0:00.47] tool result:
+    LIVE_DEEPAGENT_MESSAGING_DONE
+
+
+===== BACKGROUND AGENT: AGENT-1 general =====
+dispatched +0:00.30 -> completed +0:00.36
+
+[+0:00.30] turn 1
+  user:
+    contract scout: list active peers, then post the mailbox contract note to AGENT-2.
+
+[+0:00.30] turn 1
+  assistant tool call:
+    list_agents({})
+
+[+0:00.36] tool result:
+    Policy-allowed recipients: AGENT-2, orchestrator
+
+[+0:00.36] turn 2
+  assistant tool call:
+    post_message({"content": "Mailbox contract: read_messages always marks returned messages read; do not pass a mark_read parameter.", "priority": "high", "to": "AGENT-2", "topic": "contract"})
+
+[+0:00.36] tool result:
+    Posted 1 message(s) to: AGENT-2.
+
+[+0:00.36] turn 3
+  assistant tool call:
+    submit({"answer": "contract note sent to AGENT-2"})
+
+[+0:00.36] tool result:
+    contract note sent to AGENT-2
+
+final report returned to orchestrator:
+  contract note sent to AGENT-2
+
+===== BACKGROUND AGENT: AGENT-2 general =====
+dispatched +0:00.31 -> completed +0:00.47
+
+[+0:00.31] turn 1
+  user:
+    implementation reviewer: wait briefly, read your mailbox, then report whether the contract arrived.
+
+[+0:00.31] turn 1
+  assistant tool call:
+    read_messages({})
+
+[+0:00.46] tool result:
+    ## Message 1
+    - from: AGENT-1
+    - topic: contract
+    - priority: high
+    
+    Mailbox contract: read_messages always marks returned messages read; do not pass a mark_read parameter.
+
+[+0:00.46] turn 2
+  assistant tool call:
+    submit({"answer": "contract arrived from AGENT-1"})
+
+[+0:00.47] tool result:
+    contract arrived from AGENT-1
+
+final report returned to orchestrator:
+  contract arrived from AGENT-1

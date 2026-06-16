@@ -32,12 +32,14 @@ the orchestrator lane.
 
 ![Transcript parallel agent lanes](docs/images/transcript-parallel-agents.png)
 
-Checked-in synthetic examples are available here:
+Checked-in transcript examples are available here:
 
-- [Orchestrator/subagents HTML](transcripts/deepagent/demo_subagents/sample_demo_subagents.html)
-- [Orchestrator/subagents text](transcripts/deepagent/demo_subagents/sample_demo_subagents.txt)
-- [Deterministic launcher HTML](transcripts/deepagent/deterministic_launcher/sample_deterministic_launcher.html)
-- [Deterministic launcher text](transcripts/deepagent/deterministic_launcher/sample_deterministic_launcher.txt)
+| Example | What it shows | HTML | Text |
+| --- | --- | --- | --- |
+| Orchestrator/subagents | Parent DeepAgent visibly dispatches background subagents. | [HTML](transcripts/deepagent/demo_subagents/sample_demo_subagents.html) | [Text](transcripts/deepagent/demo_subagents/sample_demo_subagents.txt) |
+| Deterministic launcher | Fixed launcher starts peer agents without visible orchestrator spawn calls. | [HTML](transcripts/deepagent/deterministic_launcher/sample_deterministic_launcher.html) | [Text](transcripts/deepagent/deterministic_launcher/sample_deterministic_launcher.txt) |
+| Messaging demo | Background subagents coordinate through mailbox tools. | [HTML](transcripts/deepagent/messaging_demo/sample_messaging_demo.html) | [Text](transcripts/deepagent/messaging_demo/sample_messaging_demo.txt) |
+| Legacy SWE fixture | Original renderer fixture with tests and implementation lanes. | [HTML](transcripts/swe_parallel_demo/sample_swe_parallel_completion.html) | [Text](transcripts/swe_parallel_demo/sample_swe_parallel_completion.txt) |
 
 ## Install
 
